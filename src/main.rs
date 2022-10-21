@@ -1,5 +1,11 @@
+// TODO: Remove attributes and fix warnings manually
+#![allow(dead_code)]
+#![allow(non_camel_case_types)]
+#![allow(unused)]
+
+use std::any::Any;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Write};
 use std::process::exit;
 use clap::Parser;
 use flate2::read::GzDecoder;
@@ -19,7 +25,7 @@ fn main() {
 
     if cli_args.gzip {
         let mut reader = GzDecoder::new(file);
-        let nbt_type = read_nbt(reader.by_ref(), None).unwrap();
+        let nbt_type = read_nbt(std::io::Read::by_ref(&mut reader), None).unwrap();
         println!("{:#?}", nbt_type);
     } else {
         let mut reader = BufReader::new(file);
@@ -42,7 +48,7 @@ fn read_nbt<T>(reader: &mut T, specific: Option<u8>) -> Result<NBTType, ()> wher
     let field_name = if specific.is_none() && type_number != 0 {
         read_string(reader.by_ref()).unwrap()
     } else {
-        "None".to_string()
+        "".to_string()
     };
 
     match type_number {
@@ -131,6 +137,7 @@ fn read_nbt<T>(reader: &mut T, specific: Option<u8>) -> Result<NBTType, ()> wher
                 let child_type = read_nbt(reader.by_ref(), None).unwrap();
                 match child_type {
                     NBTType::TAG_End => {
+                        childs.push(Box::new(child_type));
                         break;
                     },
                     _ => {
@@ -207,7 +214,55 @@ where T: Read
     Ok(i64::from_be_bytes(buf))
 }
 
-#[derive(Debug)]
+fn write_nbt<T>(writer: &mut T, data: &NBTType, specific: Option<u8>) where T: Write {
+    match data {
+        NBTType::TAG_End => {
+            writer.by_ref().write(&(0 as u8).to_be_bytes());
+        }
+        NBTType::TAG_Byte(field_name, byte) => {
+            write_header(writer.by_ref(), &1, field_name);
+            write_u8(writer.by_ref(), byte);
+        }
+        NBTType::TAG_Short(_, _) => {}
+        NBTType::TAG_Int(_, _) => {}
+        NBTType::TAG_Long(_, _) => {}
+        NBTType::TAG_Float(_, _) => {}
+        NBTType::TAG_Double(_, _) => {}
+        NBTType::TAG_Byte_Array(_, _) => {}
+        NBTType::TAG_String(_, _) => {}
+        NBTType::TAG_List(_, _) => {}
+        NBTType::TAG_Compound(field_name, childs) => {
+            write_header(writer.by_ref(), &10, field_name);
+            for nbttype in childs.iter() {
+                write_nbt(writer.by_ref(), &**nbttype, None);
+            }
+        }
+        NBTType::TAG_Int_Array(_, _) => {}
+        NBTType::TAG_Long_Array(_, _) => {}
+    }
+}
+
+fn write_u8<T>(writer: &mut T, data: &u8) where T: Write {
+    writer.by_ref().write(data.to_be_bytes().as_ref()).unwrap();
+}
+
+fn write_u16<T>(writer: &mut T, data: &u16) where T: Write {
+    writer.by_ref().write(data.to_be_bytes().as_ref()).unwrap();
+}
+
+fn write_string<T>(writer: &mut T, data: &String) where T: Write {
+    write_u16(writer.by_ref(), &(data.len() as u16));
+    writer.by_ref().write(data.as_bytes()).unwrap();
+}
+
+fn write_header<T>(writer: &mut T, id: &u8, field_name: &String) where T: Write {
+    if field_name.len() > 0 {
+        write_u8(writer.by_ref(), id);
+        write_string(writer.by_ref(), field_name);
+    }
+}
+
+#[derive(Debug, PartialEq)]
 enum NBTType {
     TAG_End,
     TAG_Byte(String, u8),
@@ -222,4 +277,24 @@ enum NBTType {
     TAG_Compound(String, Vec<Box<NBTType>>),
     TAG_Int_Array(String, Vec<i32>),
     TAG_Long_Array(String, Vec<i64>)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::Any;
+    use crate::{NBTType, read_nbt, write_nbt};
+
+    #[test]
+    fn test_serializer() {
+        let mut inner: Vec<Box<NBTType>> = Vec::new();
+        inner.push(Box::new(NBTType::TAG_Byte("sample byte".to_string(), 3)));
+        inner.push(Box::new(NBTType::TAG_End));
+        let mut data = NBTType::TAG_Compound("hello test".to_string(), inner);
+
+        let mut bytes: Vec<u8> = Vec::new();
+        write_nbt(&mut bytes, &data, None);
+
+        let mut deserialized_data = read_nbt(&mut bytes.as_slice(), None).unwrap();
+        assert_eq!(data, deserialized_data);
+    }
 }
